@@ -13,6 +13,10 @@ class ServerClientConnection : public Connection {
 
   virtual ~ServerClientConnection();
 
+  /**
+   * @brief Attempts recovery on the new fd; closes the old socket only after
+   * recover succeeds.
+   */
   bool recoverClient(int newSocketFd);
 
   bool verifyPasskey(const string& targetKey);

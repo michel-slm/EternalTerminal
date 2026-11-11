@@ -210,8 +210,8 @@ void TerminalServer::runTerminal(
   InitialResponse response;
   shared_ptr<SocketHandler> serverSocketHandler = getSocketHandler();
   shared_ptr<SocketHandler> pipeSocketHandler(new PipeSocketHandler());
-  shared_ptr<PortForwardHandler> portForwardHandler(
-      new PortForwardHandler(serverSocketHandler, pipeSocketHandler));
+  shared_ptr<PortForwardHandler> portForwardHandler(new PortForwardHandler(
+      serverSocketHandler, pipeSocketHandler, userInfo.uid(), userInfo.gid()));
   map<string, string> environmentVariables;
   vector<string> pipePaths;
   for (const PortForwardSourceRequest &pfsr : payload.reversetunnels()) {

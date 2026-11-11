@@ -14,6 +14,12 @@ class UnixSocketHandler : public SocketHandler {
   virtual ssize_t read(int fd, void* buf, size_t count);
   virtual ssize_t write(int fd, const void* buf, size_t count);
   virtual int accept(int fd);
+  /**
+   * @brief Returns true if an accept() errno is a transient, per-connection
+   * failure that must be reported to the caller rather than aborting the
+   * server (EAGAIN/EWOULDBLOCK, ECONNABORTED, EINTR).
+   */
+  static bool isTransientAcceptError(int err);
   virtual void close(int fd);
   virtual vector<int> getActiveSockets();
 

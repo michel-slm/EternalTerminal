@@ -37,9 +37,13 @@ bool ServerConnection::acceptNewConnection(int fd) {
 }
 
 void ServerConnection::shutdown() {
-  lock_guard<std::recursive_mutex> guard(classMutex);
-  socketHandler->stopListening(serverEndpoint);
+  {
+    lock_guard<std::recursive_mutex> guard(classMutex);
+    socketHandler->stopListening(serverEndpoint);
+  }
+  // In-flight clientHandlers take classMutex, so join the pool without it.
   clientHandlerThreadPool.reset();
+  lock_guard<std::recursive_mutex> guard(classMutex);
   for (const auto& it : clientConnections) {
     it.second->shutdown();
   }

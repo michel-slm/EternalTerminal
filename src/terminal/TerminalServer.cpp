@@ -40,6 +40,8 @@ void TerminalServer::run() {
                                           __FILE__, __LINE__);
   }
 
+  uint64_t pendingFdsGeneration = 0;
+  set<int> pendingRouterFds;
   while (true) {
     {
       lock_guard<std::mutex> guard(terminalThreadMutex);
@@ -51,6 +53,20 @@ void TerminalServer::run() {
     fd_set rfds = coreFds;
     int numFds = numCoreFds;
     int maxFd = maxCoreFd;
+    if (const auto pending =
+            terminalRouter->pendingRegistrationFds(pendingFdsGeneration)) {
+      pendingRouterFds = *pending;
+    }
+    for (int fd : pendingRouterFds) {
+      if (fd >= FD_SETSIZE) {
+        // Still advanced each tick by acceptNewConnection(); just not
+        // watched, since fd_set cannot hold it.
+        continue;
+      }
+      FD_SET(fd, &rfds);
+      maxFd = max(maxFd, fd);
+      numFds++;
+    }
     timeval tv;
 
     if (numFds > FD_SETSIZE) {
@@ -69,17 +85,15 @@ void TerminalServer::run() {
     }
 
     FATAL_FAIL(numFdsSet);
-    if (numFdsSet == 0) {
-      continue;
-    }
 
-    // We have something to do!
     for (int i : serverPortFds) {
       if (FD_ISSET(i, &rfds)) {
         acceptNewConnection(i);
       }
     }
-    if (FD_ISSET(terminalRouter->getServerFd(), &rfds)) {
+    {
+      // Pending registrations advance (and time out) even when the listener
+      // has no new peers.
       auto idKeyPair = terminalRouter->acceptNewConnection();
       if (idKeyPair.id.length()) {
         addClientKey(idKeyPair.id, idKeyPair.key);

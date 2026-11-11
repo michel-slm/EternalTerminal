@@ -1,4 +1,6 @@
 #ifndef WIN32
+#include <chrono>
+
 #include "ETerminal.pb.h"
 #include "PipeSocketHandler.hpp"
 #include "TestHeaders.hpp"
@@ -34,6 +36,18 @@ class InspectableUserTerminalRouter : public UserTerminalRouter {
     lock_guard<recursive_mutex> guard(routerMutex);
     return {idInfoMap.at(id).uid(), idInfoMap.at(id).gid()};
   }
+
+  int terminalFd(const string& id) {
+    lock_guard<recursive_mutex> guard(routerMutex);
+    return idInfoMap.at(id).fd();
+  }
+
+  void expirePending() {
+    for (auto& entry : pendingRegistrations) {
+      entry.second.started -= REGISTRATION_TIMEOUT;
+    }
+  }
+  size_t pendingCount() const { return pendingRegistrations.size(); }
 };
 
 // Registers a fake terminal with the given credentials and returns its fd.
@@ -163,6 +177,76 @@ TEST_CASE("UserTerminalRouter rejects registrations with invalid credentials",
   socketHandler->close(fdLong);
   socketHandler->close(fdEmptyId);
   socketHandler->close(fdOk);
+  testEndpoint.cleanup(socketHandler);
+}
+TEST_CASE("UserTerminalRouter reclaims silent registrations",
+          "[UserTerminalRouter]") {
+  // A connection that never sends its registration packet previously
+  // blocked acceptNewConnection forever on the single accept-loop thread.
+  // Incomplete registrations must leave that loop free to serve other peers.
+  auto socketHandler = std::make_shared<PipeSocketHandler>();
+
+  RouterEndpoint testEndpoint;
+  SocketEndpoint routerEndpoint;
+  routerEndpoint.set_name(testEndpoint.path);
+  InspectableUserTerminalRouter router(socketHandler, routerEndpoint);
+
+  int fdSilent = socketHandler->connect(routerEndpoint);
+  REQUIRE(fdSilent >= 0);
+
+  const auto start = std::chrono::steady_clock::now();
+  REQUIRE(router.acceptNewConnection().id.empty());
+  REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
+  IdKeyPair accepted;
+  const int good =
+      registerFakeTerminal(socketHandler, router, routerEndpoint,
+                           "alongside-silent", string(32, 'g'), &accepted);
+  REQUIRE(accepted.id == "alongside-silent");
+  REQUIRE(router.pendingCount() == 1);
+  router.expirePending();
+  REQUIRE(router.acceptNewConnection().id.empty());
+  REQUIRE(router.pendingCount() == 0);
+  socketHandler->close(fdSilent);
+  socketHandler->close(good);
+
+  // A registration may arrive in arbitrary fragments. Its last fragment
+  // may share a socket read with terminal data, which belongs to the session.
+  const int fragmented = socketHandler->connect(routerEndpoint);
+  REQUIRE(fragmented >= 0);
+  TerminalUserInfo tui;
+  tui.set_id("fragmented");
+  tui.set_passkey(string(32, 'k'));
+  const string body =
+      Packet(TerminalPacketType::TERMINAL_USER_INFO, protoToString(tui))
+          .serialize();
+  const int64_t length = body.size();
+  socketHandler->writeAllOrThrow(fragmented, &length, 3, false);
+  REQUIRE(router.acceptNewConnection().id.empty());
+  uint64_t generation = 0;
+  const auto pending = router.pendingRegistrationFds(generation);
+  REQUIRE(pending.has_value());
+  REQUIRE(pending->size() == 1);
+  socketHandler->writeAllOrThrow(fragmented,
+                                 reinterpret_cast<const char*>(&length) + 3,
+                                 sizeof(length) - 3, false);
+  socketHandler->writeAllOrThrow(fragmented, body.data(), 1, false);
+  REQUIRE(router.acceptNewConnection().id.empty());
+  socketHandler->writeAllOrThrow(fragmented, body.data() + 1, body.size() - 1,
+                                 false);
+  socketHandler->writePacket(
+      fragmented,
+      Packet(TerminalPacketType::TERMINAL_BUFFER, "following terminal data"));
+  REQUIRE(router.acceptNewConnection().id == "fragmented");
+  const auto completed = router.pendingRegistrationFds(generation);
+  REQUIRE(completed.has_value());
+  REQUIRE(completed->empty());
+  Packet following;
+  REQUIRE(
+      socketHandler->readPacket(router.terminalFd("fragmented"), &following));
+  REQUIRE(following.getHeader() == TerminalPacketType::TERMINAL_BUFFER);
+  REQUIRE(following.getPayload() == "following terminal data");
+  socketHandler->close(fragmented);
+
   testEndpoint.cleanup(socketHandler);
 }
 #endif

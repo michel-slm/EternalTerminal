@@ -4,6 +4,26 @@
 #include "ETerminal.pb.h"
 
 namespace et {
+namespace {
+// Reads the effective uid and gid of the process at the other end of the
+// connected Unix-domain socket fd, as recorded by the kernel. Returns false if
+// the kernel cannot report them.
+bool GetPeerCredentials(int fd, uid_t* uid, gid_t* gid) {
+#ifdef __linux__
+  struct ucred cred;
+  socklen_t len = sizeof(cred);
+  if (::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
+    return false;
+  }
+  *uid = cred.uid;
+  *gid = cred.gid;
+  return true;
+#else
+  return ::getpeereid(fd, uid, gid) == 0;
+#endif
+}
+}  // namespace
+
 UserTerminalRouter::UserTerminalRouter(
     shared_ptr<PipeSocketHandler> _socketHandler,
     const SocketEndpoint &_routerEndpoint)
@@ -39,6 +59,17 @@ IdKeyPair UserTerminalRouter::acceptNewConnection() {
     }
     TerminalUserInfo tui = stringToProto<TerminalUserInfo>(packet.getPayload());
     tui.set_fd(terminalFd);
+    // The uid/gid select the identity for privileged socket operations
+    // (UserSocketOps), so take them from the kernel, not the peer.
+    uid_t peerUid;
+    gid_t peerGid;
+    if (!GetPeerCredentials(terminalFd, &peerUid, &peerGid)) {
+      LOG(ERROR) << "Failed to read router peer credentials";
+      socketHandler->close(terminalFd);
+      return IdKeyPair({"", ""});
+    }
+    tui.set_uid(static_cast<int64_t>(peerUid));
+    tui.set_gid(static_cast<int64_t>(peerGid));
 
     const bool inserted =
         idInfoMap.insert(std::make_pair(tui.id(), tui)).second;

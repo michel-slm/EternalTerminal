@@ -13,3 +13,11 @@ TEST_CASE("DoesEncryptDecrypt", "[CryptoHandler]") {
   string decryptedMessage = decryptHandler->decrypt(encryptedMessage);
   REQUIRE(message == decryptedMessage);
 }
+
+TEST_CASE("Constructor rejects wrong-length keys", "[CryptoHandler]") {
+  REQUIRE_THROWS_AS(CryptoHandler("short", 0), std::runtime_error);
+  REQUIRE_THROWS_AS(
+      CryptoHandler(string(crypto_secretbox_KEYBYTES + 1, 'k'), 0),
+      std::runtime_error);
+  REQUIRE_NOTHROW(CryptoHandler("12345678901234567890123456789012", 0));
+}

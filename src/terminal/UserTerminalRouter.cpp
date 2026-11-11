@@ -52,10 +52,15 @@ IdKeyPair UserTerminalRouter::acceptNewConnection() {
   try {
     Packet packet;
     if (!socketHandler->readPacket(terminalFd, &packet)) {
-      STFATAL << "Missing user info packet";
+      LOG(ERROR) << "Empty router registration packet";
+      socketHandler->close(terminalFd);
+      return IdKeyPair({"", ""});
     }
     if (packet.getHeader() != TerminalPacketType::TERMINAL_USER_INFO) {
-      STFATAL << "Got an invalid packet header: " << int(packet.getHeader());
+      LOG(ERROR) << "Got an invalid packet header from router peer: "
+                 << int(packet.getHeader());
+      socketHandler->close(terminalFd);
+      return IdKeyPair({"", ""});
     }
     TerminalUserInfo tui = stringToProto<TerminalUserInfo>(packet.getPayload());
     tui.set_fd(terminalFd);
@@ -70,6 +75,16 @@ IdKeyPair UserTerminalRouter::acceptNewConnection() {
     }
     tui.set_uid(static_cast<int64_t>(peerUid));
     tui.set_gid(static_cast<int64_t>(peerGid));
+    if (tui.id().empty() || tui.passkey().size() != crypto_secretbox_KEYBYTES) {
+      // The router socket is world-connectable, so registration input is
+      // untrusted; a malformed credential must be dropped here rather than
+      // aborting the daemon later when the key reaches the crypto layer.
+      LOG(ERROR) << "Rejecting terminal registration with invalid "
+                    "id/passkey length: "
+                 << tui.id().size() << "/" << tui.passkey().size();
+      socketHandler->close(terminalFd);
+      return IdKeyPair({"", ""});
+    }
 
     const bool inserted =
         idInfoMap.insert(std::make_pair(tui.id(), tui)).second;

@@ -35,6 +35,22 @@ class InspectableUserTerminalRouter : public UserTerminalRouter {
     return {idInfoMap.at(id).uid(), idInfoMap.at(id).gid()};
   }
 };
+
+// Registers a fake terminal with the given credentials and returns its fd.
+int registerFakeTerminal(shared_ptr<PipeSocketHandler> socketHandler,
+                         UserTerminalRouter& router,
+                         const SocketEndpoint& routerEndpoint, const string& id,
+                         const string& passkey, IdKeyPair* accepted) {
+  int fd = socketHandler->connect(routerEndpoint);
+  REQUIRE(fd >= 0);
+  TerminalUserInfo tui;
+  tui.set_id(id);
+  tui.set_passkey(passkey);
+  socketHandler->writePacket(
+      fd, Packet(TerminalPacketType::TERMINAL_USER_INFO, protoToString(tui)));
+  *accepted = router.acceptNewConnection();
+  return fd;
+}
 }  // namespace
 
 TEST_CASE(
@@ -68,6 +84,74 @@ TEST_CASE(
   REQUIRE(storedGid == static_cast<int64_t>(getgid()));
 
   socketHandler->close(terminalFd);
+  testEndpoint.cleanup(socketHandler);
+}
+
+TEST_CASE("UserTerminalRouter rejects malformed registration packets",
+          "[UserTerminalRouter]") {
+  // Each malformed packet must cost only the offending connection.
+  auto socketHandler = std::make_shared<PipeSocketHandler>();
+
+  RouterEndpoint testEndpoint;
+  SocketEndpoint routerEndpoint;
+  routerEndpoint.set_name(testEndpoint.path);
+  InspectableUserTerminalRouter router(socketHandler, routerEndpoint);
+
+  // Zero-length packet: an 8-byte zero length prefix.
+  int fdZero = socketHandler->connect(routerEndpoint);
+  REQUIRE(fdZero >= 0);
+  const int64_t zero = 0;
+  socketHandler->writeAllOrThrow(fdZero, &zero, sizeof(zero), false);
+  IdKeyPair accepted = router.acceptNewConnection();
+  REQUIRE(accepted.id.empty());
+  REQUIRE(accepted.key.empty());
+
+  // Wrong packet header: valid framing, header is not TERMINAL_USER_INFO.
+  int fdHeader = socketHandler->connect(routerEndpoint);
+  REQUIRE(fdHeader >= 0);
+  socketHandler->writePacket(
+      fdHeader, Packet(TerminalPacketType::TERMINAL_BUFFER, "junk"));
+  accepted = router.acceptNewConnection();
+  REQUIRE(accepted.id.empty());
+  REQUIRE(accepted.key.empty());
+
+  // The router still accepts a valid registration afterwards.
+  int fdOk = registerFakeTerminal(socketHandler, router, routerEndpoint,
+                                  "still-alive", string(32, 'k'), &accepted);
+  REQUIRE(accepted.id == "still-alive");
+  socketHandler->close(fdZero);
+  socketHandler->close(fdHeader);
+  socketHandler->close(fdOk);
+  testEndpoint.cleanup(socketHandler);
+}
+
+TEST_CASE("UserTerminalRouter rejects registrations with invalid credentials",
+          "[UserTerminalRouter]") {
+  auto socketHandler = std::make_shared<PipeSocketHandler>();
+
+  RouterEndpoint testEndpoint;
+  SocketEndpoint routerEndpoint;
+  routerEndpoint.set_name(testEndpoint.path);
+  InspectableUserTerminalRouter router(socketHandler, routerEndpoint);
+
+  IdKeyPair accepted;
+  int fdShort = registerFakeTerminal(socketHandler, router, routerEndpoint,
+                                     "short-key", "short", &accepted);
+  REQUIRE(accepted.id.empty());
+  int fdLong = registerFakeTerminal(socketHandler, router, routerEndpoint,
+                                    "long-key", string(33, 'k'), &accepted);
+  REQUIRE(accepted.id.empty());
+  int fdEmptyId = registerFakeTerminal(socketHandler, router, routerEndpoint,
+                                       "", string(32, 'k'), &accepted);
+  REQUIRE(accepted.id.empty());
+  int fdOk = registerFakeTerminal(socketHandler, router, routerEndpoint,
+                                  "valid", string(32, 'k'), &accepted);
+  REQUIRE(accepted.id == "valid");
+
+  socketHandler->close(fdShort);
+  socketHandler->close(fdLong);
+  socketHandler->close(fdEmptyId);
+  socketHandler->close(fdOk);
   testEndpoint.cleanup(socketHandler);
 }
 #endif

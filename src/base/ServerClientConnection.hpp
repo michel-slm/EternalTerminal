@@ -16,12 +16,22 @@ class ServerClientConnection : public Connection {
   /**
    * @brief Attempts recovery on the new fd; closes the old socket only after
    * recover succeeds.
+   *
+   * Returns false without touching the live session if another reconnect for
+   * this client is already in flight.
    */
   bool recoverClient(int newSocketFd);
 
   bool verifyPasskey(const string& targetKey);
 
  protected:
+  /**
+   * @brief Set while a reconnect is mid-handshake.
+   *
+   * Lets a second reconnect be refused rather than queued, since queueing it
+   * would occupy a handler thread for as long as the first one blocks.
+   */
+  std::atomic<bool> recoveryInFlight;
 };
 }  // namespace et
 

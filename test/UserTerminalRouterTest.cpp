@@ -115,12 +115,23 @@ TEST_CASE("UserTerminalRouter rejects malformed registration packets",
   REQUIRE(accepted.id.empty());
   REQUIRE(accepted.key.empty());
 
+  // TERMINAL_USER_INFO-framed packet whose payload is not valid protobuf
+  // ("junk" = field 13, wire type 2, length 117 with 2 bytes remaining).
+  int fdProto = socketHandler->connect(routerEndpoint);
+  REQUIRE(fdProto >= 0);
+  socketHandler->writePacket(
+      fdProto, Packet(TerminalPacketType::TERMINAL_USER_INFO, "junk"));
+  accepted = router.acceptNewConnection();
+  REQUIRE(accepted.id.empty());
+  REQUIRE(accepted.key.empty());
+
   // The router still accepts a valid registration afterwards.
   int fdOk = registerFakeTerminal(socketHandler, router, routerEndpoint,
                                   "still-alive", string(32, 'k'), &accepted);
   REQUIRE(accepted.id == "still-alive");
   socketHandler->close(fdZero);
   socketHandler->close(fdHeader);
+  socketHandler->close(fdProto);
   socketHandler->close(fdOk);
   testEndpoint.cleanup(socketHandler);
 }

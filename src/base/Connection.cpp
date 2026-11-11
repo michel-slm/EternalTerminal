@@ -152,7 +152,15 @@ bool Connection::read(Packet* packet) {
   VLOG(4) << "Before read get connectionMutex";
   lock_guard<std::recursive_mutex> guard(connectionMutex);
   VLOG(4) << "After read get connectionMutex";
-  ssize_t messagesRead = reader->read(packet);
+  ssize_t messagesRead;
+  try {
+    messagesRead = reader->read(packet);
+  } catch (const MalformedPacketError& ex) {
+    // The reader has not counted the packet, so recovery resends it.
+    LOG(WARNING) << "Reconnecting after a rejected packet: " << ex.what();
+    closeSocketAndMaybeReconnect();
+    return false;
+  }
   auto localErrno = GetErrno();
   if (messagesRead == -1) {
     if (isSkippableError(localErrno)) {

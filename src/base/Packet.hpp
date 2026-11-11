@@ -13,9 +13,12 @@ class Packet {
   Packet(bool _encrypted, uint8_t _header, const string& _payload)
       : encrypted(_encrypted), header(_header), payload(_payload) {}
   explicit Packet(const string& serializedPacket) {
+    if (serializedPacket.size() < HEADER_SIZE) {
+      throw MalformedPacketError("Serialized packet shorter than its header");
+    }
     encrypted = serializedPacket[0];
     header = serializedPacket[1];
-    payload = serializedPacket.substr(2);
+    payload = serializedPacket.substr(HEADER_SIZE);
   }
 
   void decrypt(shared_ptr<CryptoHandler> cryptoHandler) {
@@ -23,7 +26,9 @@ class Packet {
       encrypted = false;
       payload = cryptoHandler->decrypt(payload);
     } else {
-      STFATAL << "Tried to decrypt a packet that wasn't encrypted";
+      // Peer-controlled framing: sever this connection, not the process.
+      throw MalformedPacketError(
+          "Received an unencrypted packet on an encrypted connection");
     }
   }
 
@@ -49,8 +54,9 @@ class Packet {
     return s;
   }
 
- protected:
   static const int HEADER_SIZE = 2;
+
+ protected:
   bool encrypted;
   uint8_t header;
 

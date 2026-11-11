@@ -370,7 +370,11 @@ void TerminalServer::runTerminal(
               break;
             }
             default:
-              STFATAL << "Unknown packet type: " << int(packetType);
+              LOG(WARNING) << "Rejecting untrusted packet type from client: "
+                           << int(packetType) << "; closing connection";
+              serverClientState->closeSocket();
+              run = false;
+              break;
           }
         }
       }
@@ -394,22 +398,32 @@ void TerminalServer::runTerminal(
 
 void TerminalServer::handleConnection(
     shared_ptr<ServerClientConnection> serverClientState) {
-  Packet packet;
-  while (!serverClientState->readPacket(&packet)) {
-    LOG(INFO) << "Waiting for initial packet...";
-    sleep(1);
-  }
-  if (packet.getHeader() != EtPacketType::INITIAL_PAYLOAD) {
-    STFATAL << "Invalid header: expecting INITIAL_PAYLOAD but got "
-            << packet.getHeader();
-  }
-  InitialPayload payload = stringToProto<InitialPayload>(packet.getPayload());
-  if (payload.jumphost()) {
-    LOG(INFO) << "RUNNING JUMPHOST";
-    runJumpHost(serverClientState, payload);
-  } else {
-    LOG(INFO) << "RUNNING TERMINAL";
-    runTerminal(serverClientState, payload);
+  // Runs on its own thread: an exception escaping it would terminate the
+  // daemon, so peer-triggered errors end only this session.
+  try {
+    Packet packet;
+    while (!serverClientState->readPacket(&packet)) {
+      LOG(INFO) << "Waiting for initial packet...";
+      sleep(1);
+    }
+    if (packet.getHeader() != EtPacketType::INITIAL_PAYLOAD) {
+      throw std::runtime_error("Expected INITIAL_PAYLOAD but got header " +
+                               to_string(int(packet.getHeader())));
+    }
+    InitialPayload payload = stringToProto<InitialPayload>(packet.getPayload());
+    if (payload.jumphost()) {
+      LOG(INFO) << "RUNNING JUMPHOST";
+      runJumpHost(serverClientState, payload);
+    } else {
+      LOG(INFO) << "RUNNING TERMINAL";
+      runTerminal(serverClientState, payload);
+    }
+  } catch (const std::exception &ex) {
+    LOG(ERROR) << "Terminal thread failed: " << ex.what();
+    serverClientState->closeSocket();
+    string id = serverClientState->getId();
+    serverClientState.reset();
+    removeClient(id);
   }
 }
 

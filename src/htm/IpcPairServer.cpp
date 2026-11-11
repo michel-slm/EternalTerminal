@@ -16,6 +16,17 @@ void IpcPairServer::pollAccept() {
     return;
   }
 
+#ifndef WIN32
+  // The socket path is predictable; only this user may drive the daemon.
+  uid_t peerUid;
+  gid_t peerGid;
+  if (!GetPeerCredentials(fd, &peerUid, &peerGid) || peerUid != ::geteuid()) {
+    LOG(ERROR) << "Rejecting htm IPC connection from a different user";
+    socketHandler->close(fd);
+    return;
+  }
+#endif
+
   if (endpointFd >= 0) {
     // Need to disconnect the current client
     closeEndpoint();

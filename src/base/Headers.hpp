@@ -323,6 +323,26 @@ class MalformedPacketError : public std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+#ifndef WIN32
+// Reads the effective uid and gid of the process at the other end of the
+// connected Unix-domain socket fd, as recorded by the kernel. Returns false if
+// the kernel cannot report them.
+inline bool GetPeerCredentials(int fd, uid_t* uid, gid_t* gid) {
+#ifdef __linux__
+  struct ucred cred;
+  socklen_t len = sizeof(cred);
+  if (::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
+    return false;
+  }
+  *uid = cred.uid;
+  *gid = cred.gid;
+  return true;
+#else
+  return ::getpeereid(fd, uid, gid) == 0;
+#endif
+}
+#endif
+
 template <typename T>
 inline T stringToProto(const string& s) {
   T t;

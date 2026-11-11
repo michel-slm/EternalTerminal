@@ -13,6 +13,13 @@ struct IdKeyPair {
 
 class ServerConnection {
  public:
+  /**
+   * @brief Maximum connections queued for or inside clientHandler; further
+   * connections are closed on arrival. A slot frees when clientHandler
+   * returns; queued connections wait for a pool worker with no deadline.
+   */
+  static constexpr int MAX_PENDING_HANDSHAKES = 64;
+
   explicit ServerConnection(std::shared_ptr<SocketHandler> socketHandler,
                             const SocketEndpoint& _serverEndpoint);
 
@@ -57,6 +64,8 @@ class ServerConnection {
       shared_ptr<ServerClientConnection> serverClientState) = 0;
 
  protected:
+  /** @brief Connections currently inside clientHandler's handshake stage. */
+  int pendingHandshakes = 0;
   void destroyPartialConnection(const string& clientId);
 
   shared_ptr<SocketHandler> socketHandler;
